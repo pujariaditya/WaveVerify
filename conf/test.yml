@@ -1,0 +1,37 @@
+$include:
+  - conf/base.yml
+
+# Wandb Configuration
+run_name: "test_audioseal"
+
+batch_size: 4
+
+#Test Data Configuration
+test:
+  AudioDataset:
+    duration: 1.0
+    n_examples: 10
+    without_replacement: true
+    num_channels: 1
+    shuffle_loaders: false
+  
+  AudioLoader:
+    shuffle: false
+    ext: ['.wav', '.flac', '.mp3', '.mp4']
+    relative_path: ''
+    shuffle_state: 0
+
+# Dataset Folders
+test/build_dataset.folders:
+  libri_speech:
+    - /home/UNT/asp0178/ResearchDrive/AudioDataset/test/LibriSpeech
+  common_voice:
+    - /home/UNT/asp0178/ResearchDrive/AudioDataset/test/commonvoice
+  cmu_arctic:
+    - /home/UNT/asp0178/ResearchDrive/AudioDataset/test/cmu_arctic
+  dipco:
+    - /home/UNT/asp0178/ResearchDrive/AudioDataset/test/dipco
+  # asvspoof:
+  #   - /home/UNT/asp0178/ResearchDrive/AudioDataset/ASVspoof2021
+  # ravdass:
+  #   - /home/UNT/asp0178/ResearchDrive/AudioDataset/RAVDESS

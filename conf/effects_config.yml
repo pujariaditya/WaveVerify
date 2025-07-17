@@ -1,0 +1,97 @@
+# Audio Effect Configuration
+# This file defines the parameters for various audio effects used in training and evaluation
+
+# Effect parameter grid for adaptive scheduling
+effect_param_grid:
+  # Identity - baseline (no effect)
+  identity: {}
+  
+  # Frequency domain effects 
+  highpass_filter:
+    cutoff_freq:
+      choices: [500, 3500]  
+  
+  lowpass_filter:
+    cutoff_freq:
+      choices: [1000, 2000]  
+  
+  bandpass_filter:
+    cutoff_freq_low:
+      choices: [300]
+    cutoff_freq_high:
+      choices: [4000] 
+  
+  # Time domain effects
+  speed:
+    speed:
+      choices: [0.8]  
+  
+  resample:
+    new_sample_rate:
+      choices: [32000] 
+  
+  random_noise:
+    noise_std:
+      choices: [0.001]
+
+# Training effects (applied during training phase)
+# Using various parameter values for robustness during training
+train_effects:
+  - name: identity
+    params: {}
+  - name: highpass_filter
+    params:
+      cutoff_freq: 500
+  - name: highpass_filter
+    params:
+      cutoff_freq: 3500
+  - name: lowpass_filter
+    params:
+      cutoff_freq: 1000
+  - name: lowpass_filter
+    params:
+      cutoff_freq: 2000
+  - name: bandpass_filter
+    params:
+      cutoff_freq_low: 300
+      cutoff_freq_high: 4000
+  - name: speed
+    params:
+      speed: 0.8
+  - name: resample
+    params:
+      new_sample_rate: 32000
+  - name: random_noise
+    params:
+      noise_std: 0.001
+
+# Evaluation effects (applied during validation/testing)
+# Using specific parameter values 
+eval_effects:
+  - name: identity
+    params: {}
+  - name: resample
+    params:
+      new_sample_rate: 32000
+  - name: speed
+    params:
+      speed: 0.8
+  - name: random_noise
+    params:
+      noise_std: 0.001
+  - name: lowpass_filter
+    params:
+      cutoff_freq: 2000
+  - name: highpass_filter
+    params:
+      cutoff_freq: 3500
+  - name: bandpass_filter
+    params:
+      cutoff_freq_low: 300
+      cutoff_freq_high: 4000
+
+# Scheduler configuration
+scheduler_config:
+  beta: 0.9  # Exponential moving average factor
+  ber_threshold: 0.001  # BER success threshold
+  miou_threshold: 0.95  # mIoU success threshold

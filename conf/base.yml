@@ -1,0 +1,187 @@
+# Wandb
+project: "WaveVerify"
+run_name: "base"
+
+Generator:
+  sample_rate: 16000
+  channels_audio: 1
+  dimension: 128
+  msg_dimension: 16
+  channels_enc: 64
+  channels_dec: 96
+  n_fft_base: 64
+  n_residual_enc: 2
+  n_residual_dec: 3
+  res_scale_enc: 0.5773502691896258
+  res_scale_dec: 0.5773502691896258
+  strides: [8, 5, 4, 2]
+  activation: ELU
+  activation_kwargs:
+    alpha: 1.0
+  norm: weight_norm
+  norm_kwargs: {}
+  kernel_size: 5
+  last_kernel_size: 5
+  residual_kernel_size: 5
+  dilation_base: 1
+  skip: identity
+  final_activation: Tanh
+  act_all: false
+  expansion: 1
+  groups: -1
+  encoder_l2norm: true
+  bias: true
+  spec: stft
+  spec_layer: 1x1_zero
+  spec_compression: log
+  spec_learnable: false
+  pad_mode: constant
+  causal: true
+  zero_init: true
+  inout_norm: true
+  nbits: 16
+
+
+Locator:
+  sample_rate: 16000
+  channels_audio: 1
+  dimension: 64
+  channels_enc: 32
+  n_fft_base: 64
+  n_residual_enc: 1
+  res_scale_enc: 0.5773502691896258
+  strides: [8, 4]
+  activation: ELU
+  activation_kwargs:
+    alpha: 1.0
+  norm: weight_norm
+  norm_kwargs: {}
+  kernel_size: 5
+  last_kernel_size: 5
+  residual_kernel_size: 5
+  dilation_base: 1
+  skip: identity
+  act_all: false
+  expansion: 1
+  groups: -1
+  encoder_l2norm: true
+  bias: true
+  spec: stft
+  spec_compression: log
+  pad_mode: constant
+  causal: true
+  zero_init: true
+  inout_norm: true
+  output_dim: 32
+  nbits: 16
+
+Detector:
+  sample_rate: 16000
+  channels_audio: 1
+  dimension: 128
+  channels_enc: 64
+  n_fft_base: 64
+  n_residual_enc: 2
+  res_scale_enc: 0.5773502691896258
+  strides: [8, 5, 4, 2]
+  activation: ELU
+  activation_kwargs:
+    alpha: 1.0
+  norm: weight_norm
+  norm_kwargs: {}
+  kernel_size: 5
+  last_kernel_size: 5
+  residual_kernel_size: 5
+  dilation_base: 1
+  skip: identity
+  act_all: false
+  expansion: 1
+  groups: -1
+  encoder_l2norm: true
+  bias: true
+  spec: stft
+  spec_compression: log
+  pad_mode: constant
+  causal: true
+  zero_init: true
+  inout_norm: true
+  output_dim: 32
+  nbits: 16
+
+
+# Discriminator
+Discriminator.sample_rate: 16000
+Discriminator.rates: []
+Discriminator.periods: [2, 3, 5, 7, 11]
+Discriminator.fft_sizes: [2048, 1024, 512]
+Discriminator.bands:
+  - [0.0, 0.1]
+  - [0.1, 0.25]
+  - [0.25, 0.5]
+  - [0.5, 0.75]
+  - [0.75, 1.0]
+
+# Optimization
+AdamW.betas: [0.8, 0.99]
+AdamW.lr: 0.0001 
+ExponentialLR.gamma: 0.999996
+
+val_batch_size: 20
+device: cuda
+num_iters: 600000
+save_iters: [10000, 50000, 100000, 150000, 160000, 170000, 180000, 190000, 200000, 210000, 220000, 230000, 240000, 250000, 260000, 270000, 280000, 290000, 300000, 310000, 320000, 330000, 340000, 350000, 360000, 370000, 380000, 390000, 400000, 410000, 420000, 430000, 440000, 450000, 460000, 470000, 480000, 490000, 500000, 510000, 520000, 530000, 540000, 550000, 560000, 570000, 580000, 590000, 599999]
+valid_freq: 1000
+sample_freq: 10000
+num_workers: 4
+val_idx: [0, 1, 2, 3, 4, 5]
+seed: 0
+lambdas:
+  waveform/loss: 1000.0
+  mel/loss: 20.0 
+  stft/loss: 10.0
+
+  adv/gen_loss: 40.0
+  
+  loc/loss: 100.0
+  dec/loss: 10000.0
+  
+resume: false
+
+# Loss setup
+MultiScaleSTFTLoss.window_lengths: [2048, 512]
+
+MelSpectrogramLoss.n_mels: [5, 10, 20, 40, 80, 160, 320]
+MelSpectrogramLoss.window_lengths: [32, 64, 128, 256, 512, 1024, 2048]
+MelSpectrogramLoss.mel_fmin: [0, 0, 0, 0, 0, 0, 0]
+MelSpectrogramLoss.mel_fmax: [null, null, null, null, null, null, null]
+MelSpectrogramLoss.pow: 1.0
+MelSpectrogramLoss.clamp_eps: 1.0e-5
+MelSpectrogramLoss.mag_weight: 0.0
+
+# Data
+batch_size: 32
+train/AudioDataset.duration: 1.0
+train/AudioDataset.n_examples: 500000
+
+val/AudioDataset.duration: 5.0
+val/AudioDataset.n_examples: 1000
+
+test/AudioDataset.duration: 10.0
+test/AudioDataset.n_examples: 1000
+
+AudioLoader.shuffle: true
+AudioDataset.without_replacement: true
+
+train/build_dataset.folders:
+  libri_speech:
+    - # TODO: add training dataset folder path
+
+val/build_dataset.folders:
+  libri_speech:
+    - # TODO: add validation dataset folder path
+    
+# test/build_dataset.folders:
+  libri_speech:
+    - # TODO: add test dataset folder path
+
+    
