@@ -4,7 +4,7 @@
 
 ## Abstract
 
-With the rapid advancement of voice generation technologies capable of producing perceptually indistinguishable synthetic speech, the need for robust audio content authentication has become critical. WaveVerify addresses this challenge through an advanced watermarking system that leverages a FiLM-based generator for resilient multi-band watermark embedding and a Mixture-of-Experts detector for accurate extraction and localization.
+With the rapid advancement of voice generation technologies capable of producing perceptually indistinguishable synthetic speech, the need for robust audio content authentication has become critical. WaveVerify addresses this challenge through an advanced watermarking system that leverages a FiLM-based generator for resilient multi-band watermark embedding and detectors for accurate extraction and localization.
 
 ## Key Features
 
@@ -32,7 +32,7 @@ WaveVerify outperforms state-of-the-art models including AudioSeal and WavMark a
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/username/WaveVerify.git
+git clone https://github.com/pujariaditya/WaveVerify.git
 cd WaveVerify
 ```
 
