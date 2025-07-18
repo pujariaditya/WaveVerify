@@ -30,20 +30,21 @@ WaveVerify outperforms state-of-the-art models including AudioSeal and WavMark a
 
 ## Installation
 
-1. Clone the repository:
+### Quick Install
+
+1. Clone and install the package:
 ```bash
 git clone https://github.com/pujariaditya/WaveVerify.git
 cd WaveVerify
+pip install -e .
 ```
 
-2. Create and activate a virtual environment:
+### Manual Setup (Alternative)
+
+If you prefer manual setup without package installation:
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-```
-
-3. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
@@ -91,19 +92,80 @@ Update the dataset folder path in `conf/base.yml` to point to your `AudioDataset
 To train the WaveVerify model:
 
 ```bash
-python scripts/train.py --args.load conf/base.yml --save_path ckpt/runs/base/
+export CUDA_VISIBLE_DEVICES=0
+python scripts/train.py --args.load conf/base.yml --save_path checkpoints/runs/base/
 ```
 
 ### Inference
 
-*Documentation for inference will be added with the pretrained checkpoint release.*
+WaveVerify is designed as a Python library for integrating audio watermarking into your applications. The pretrained checkpoint will be automatically downloaded on first use.
+
+#### Installation
+
+```python
+# Import the package
+from waveverify import WaveVerify
+```
+
+#### Basic Usage
+
+```python
+from waveverify import WaveVerify, WatermarkID
+
+# Initialize (auto-downloads checkpoint on first use)
+wv = WaveVerify()
+
+# Create watermark identities for different use cases
+creator_wm = WatermarkID.for_creator("artist_name_2024")
+timestamp_wm = WatermarkID.for_timestamp()  # Current time
+license_wm = WatermarkID.for_license("CC-BY-4.0")
+tracking_wm = WatermarkID.for_tracking("order_12345")
+
+# Embed watermark (watermark ID is REQUIRED)
+audio, sr, watermark = wv.embed("input.wav", creator_wm, output_path="watermarked.wav")
+print(f"Embedded: {watermark}")
+
+# Detect watermark
+detected_watermark, confidence = wv.detect("watermarked.wav")
+print(f"Detected: {detected_watermark} (confidence: {confidence:.2%})")
+
+# Verify specific watermark
+is_authentic = wv.verify("watermarked.wav", creator_wm)
+
+# Locate watermark regions
+mask = wv.locate("watermarked.wav")
+# mask is a numpy array showing watermark presence over time
+```
+
+#### Watermark Types
+
+**Important**: WaveVerify embeds exactly 16 binary bits (65,536 possible values) into audio. All watermark types are automatically constrained to this limit.
+
+WaveVerify provides specialized watermark types for common use cases:
+
+```python
+# For content creators (artists, podcasters, journalists)
+artist_wm = WatermarkID.for_creator("beyonce_2024")
+
+# For temporal tracking (when was this created?)
+dated_wm = WatermarkID.for_timestamp(datetime(2024, 7, 17))
+
+# For license/rights management
+license_wm = WatermarkID.for_license("ALL-RIGHTS")
+
+# For distribution tracking
+episode_wm = WatermarkID.for_tracking("podcast_S01E05")
+
+# Custom watermarks (when others don't fit)
+custom_wm = WatermarkID.custom("1010101010101010")      # 16-bit binary
+custom_wm = WatermarkID.custom(42)                      # Integer 0-65535
+```
 
 ## Project Status
 
 - [x] Training implementation
-- [ ] Pretrained checkpoint release
-- [ ] Inference documentation
-- [ ] Evaluation scripts
+- [x] Pretrained checkpoint release
+- [x] Python package for easy integration 
 
 ## Citation
 
@@ -116,10 +178,6 @@ If you use WaveVerify in your research, please cite:
   year={2025}
 }
 ```
-
-## License
-
-*License information to be added*
 
 ## Contact
 

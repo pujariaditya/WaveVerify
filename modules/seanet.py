@@ -668,15 +668,15 @@ class SEANetEncoder(nn.Module):
         except Exception as e:
             logger.error(f"Error in SEANetEncoder initialization: {str(e)}", exc_info=True)
             raise
-            # Build encoder blocks for each scale
-            self.blocks = nn.ModuleList()
-            self.spec_blocks = nn.ModuleList()
-            self.downsample = nn.ModuleList()
-            self.film_layers = nn.ModuleList()  # FiLM modulation layers
             
-            stride = 1  # Cumulative stride for spectrogram blocks
-            
-            for block_idx, ratio in enumerate(self.ratios):
+        # Build encoder blocks for each scale
+        self.blocks = nn.ModuleList()
+        self.spec_blocks = nn.ModuleList()
+        self.downsample = nn.ModuleList()
+        
+        stride = 1  # Cumulative stride for spectrogram blocks
+        
+        for block_idx, ratio in enumerate(self.ratios):
                 # Build residual blocks for current scale
                 block = []
                 for j in range(1, n_residual_layers + 1):
@@ -771,33 +771,30 @@ class SEANetEncoder(nn.Module):
                 )
                 self.downsample.append(downsample)
                 
-                # Add FiLM modulation layer (not used in init, defined later)
-                self.film_layers.append(FiLM(msg_dimension))
-                
                 mult *= 2  # Double channels after each scale
 
-            # Final spectrogram block
-            self.spec_post = SpecBlock(
-                spec,
-                spec_compression,
-                mult * n_fft_base,
-                mult * n_filters,
-                stride,
-                norm,
-                norm_params,
-                bias=False,
-                pad_mode=pad_mode,
-                learnable=spec_learnable,
-                causal=causal,
-                mean=spec_means[-1],
-                std=spec_stds[-1],
-                res_scale=res_scale,
-                zero_init=zero_init,
-                inout_norm=inout_norm,
-            )
-            
-            # Final convolution and projection layers
-            self.conv_post = nn.Sequential(
+        # Final spectrogram block
+        self.spec_post = SpecBlock(
+            spec,
+            spec_compression,
+            mult * n_fft_base,
+            mult * n_filters,
+            stride,
+            norm,
+            norm_params,
+            bias=False,
+            pad_mode=pad_mode,
+            learnable=spec_learnable,
+            causal=causal,
+            mean=spec_means[-1],
+            std=spec_stds[-1],
+            res_scale=res_scale,
+            zero_init=zero_init,
+            inout_norm=inout_norm,
+        )
+        
+        # Final convolution and projection layers
+        self.conv_post = nn.Sequential(
                 act(inplace=False, **activation_params),
                 # Depth-wise convolution
                 SConv1d(
@@ -823,32 +820,65 @@ class SEANetEncoder(nn.Module):
                 ),
                 # Optional L2 normalization
                 L2Norm(dimension, inout_norm=inout_norm) if l2norm else nn.Identity(),
-            )
-            
-            if l2norm:
-                # Special initialization for L2 norm case
-                # Prevents gradient explosion with silent audio
-                self.conv_post[-2].conv.conv.bias.data.normal_()
+        )
+        
+        if l2norm:
+            # Special initialization for L2 norm case
+            # Prevents gradient explosion with silent audio
+            self.conv_post[-2].conv.conv.bias.data.normal_()
 
-            # Build message embedding network
-            embedding_mlp = []
-            for _ in range(embedding_layers):
-                embedding_mlp.append(nn.Linear(embedding_dim, embedding_dim))
-                embedding_mlp.append(nn.ReLU())
-            
-            self.msg_embedding = nn.Sequential(
-                nn.Linear(msg_dimension, embedding_dim),
-                *embedding_mlp
-            )
-            
-            # Create frequency-specific FiLM layers for adaptive modulation
-            # One set of FiLM layers per scale and frequency band
-            self.film_layers = nn.ModuleList([
-                nn.ModuleList([FiLM(embedding_dim) for _ in range(freq_bands)])
-                for mult in [1, 2, 4, 8]  # Corresponding to each scale
-            ])
-            
-            logger.info("SEANetEncoder initialization complete")
+        # Build message embedding network
+        embedding_mlp = []
+        for _ in range(embedding_layers):
+            embedding_mlp.append(nn.Linear(embedding_dim, embedding_dim))
+            embedding_mlp.append(nn.ReLU())
+        
+        self.msg_embedding = nn.Sequential(
+            nn.Linear(msg_dimension, embedding_dim),
+            *embedding_mlp
+        )
+        
+        # Create frequency-specific FiLM layers for adaptive modulation
+        # Each scale has freq_bands number of FiLM layers for band-specific modulation
+        self.film_layers = nn.ModuleList([
+            nn.ModuleList([FiLM(embedding_dim) for _ in range(freq_bands)])
+            for _ in range(len(self.ratios))
+        ])
+
+        # Initialize weights with standard deviation scaling
+        for module in self.modules():
+            if isinstance(module, nn.Conv1d):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, nn.Linear):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+        # Store module references for efficient access
+        self.all_modules = (
+            self.blocks, self.spec_blocks, self.downsample
+        )
+
+        # Store parameters for reproducibility
+        self.params = {
+            'channels': channels,
+            'dimension': dimension,
+            'msg_dimension': msg_dimension,
+            'n_filters': n_filters,
+            'n_fft_base': n_fft_base,
+            'n_residual_layers': n_residual_layers,
+            'ratios': self.ratios,
+            'activation': activation,
+            'activation_params': activation_params,
+            'norm': norm,
+            'norm_params': norm_params,
+            'l2norm': l2norm,
+            'embedding_dim': embedding_dim,
+            'embedding_layers': embedding_layers,
+            'freq_bands': freq_bands,
+        }
 
     def forward(self, x: Tensor, msg: Tensor) -> Tensor:
         """Encode audio with embedded message.
@@ -861,6 +891,11 @@ class SEANetEncoder(nn.Module):
             Encoded features of shape (batch, dimension, time//hop_length).
         """
         try:
+            # ------------------------------------------------------------------
+            # Use input tensor's device for all operations
+            # ------------------------------------------------------------------
+            device = x.device
+
             # Keep reference to original waveform for spectrogram computation
             wav = x
             
@@ -868,15 +903,17 @@ class SEANetEncoder(nn.Module):
             x = self.conv_pre(x)
             
             # Process message embedding if provided
-            msg_embedded = None
+            msg_embedded: Optional[Tensor] = None
             if msg is not None:
-                msg = msg.float()
+                # Ensure message tensor is on the same device
+                msg = msg.to(device).float()
+
                 # Transform message to embedding space
-                msg_embedded = self.msg_embedding(msg)
+                msg_embedded = self.msg_embedding(msg).to(device)
 
             # Process through encoder scales
-            for block_idx, (block, spec_block, downsample, film_layer) in enumerate(zip(
-                self.blocks, self.spec_blocks, self.downsample, self.film_layers
+            for block_idx, (block, spec_block, downsample) in enumerate(zip(
+                self.blocks, self.spec_blocks, self.downsample
             )):
                 # Residual blocks
                 x = block(x)
@@ -889,7 +926,14 @@ class SEANetEncoder(nn.Module):
                 
                 # Apply FiLM modulation if message is provided
                 if msg_embedded is not None:
-                    # Split features into frequency bands for band-specific modulation
+                    # Validate that channels are divisible by freq_bands
+                    if x.shape[1] % self.freq_bands != 0:
+                        raise ValueError(
+                            f"Number of channels ({x.shape[1]}) must be divisible by "
+                            f"freq_bands ({self.freq_bands}) at scale {block_idx}"
+                        )
+                    
+                    # Frequency-specific FiLM modulation
                     band_width = x.shape[1] // self.freq_bands
                     x_bands = []  # Collect modulated bands
                     
@@ -899,8 +943,23 @@ class SEANetEncoder(nn.Module):
                         end_channel = (band_idx + 1) * band_width
                         x_band = x[:, start_channel:end_channel]
                         
-                        # Apply band-specific FiLM modulation
-                        x_band = film_layer[band_idx](x_band, msg_embedded)
+                        # ------------------------------------------------------------------
+                        # Handle DataParallel / DDP splitting where the first dimension
+                        # (batch) may differ across devices. Slice or repeat the message
+                        # embedding so that it always matches the current mini-batch size.
+                        # ------------------------------------------------------------------
+                        curr_bs = x_band.size(0)
+
+                        if msg_embedded.size(0) == curr_bs:
+                            msg_embedded_split = msg_embedded
+                        elif msg_embedded.size(0) > curr_bs:
+                            # Slice if we have a larger shared embedding batch
+                            msg_embedded_split = msg_embedded[:curr_bs]
+                        else:
+                            # Rare case: replicate to match (should not normally happen)
+                            reps = int(np.ceil(curr_bs / msg_embedded.size(0)))
+                            msg_embedded_split = msg_embedded.repeat(reps, 1)[:curr_bs]
+                        x_band = self.film_layers[block_idx][band_idx](x_band, msg_embedded_split)
                         x_bands.append(x_band)
                     
                     # Recombine modulated frequency bands
@@ -1033,10 +1092,6 @@ class SEANetDecoder(nn.Module):
             
             logger.info(f"Initializing SEANetDecoder: dimension={dimension}, ratios={self.ratios}")
             
-        except Exception as e:
-            logger.error(f"Error in SEANetDecoder initialization: {str(e)}", exc_info=True)
-            raise
-
             # Build upsampling blocks for each scale
             for i, ratio in enumerate(self.ratios):
                 # Add progressive residual scaling
@@ -1149,6 +1204,10 @@ class SEANetDecoder(nn.Module):
             self.model = nn.Sequential(*model)
             
             logger.info("SEANetDecoder initialization complete")
+            
+        except Exception as e:
+            logger.error(f"Error in SEANetDecoder initialization: {str(e)}", exc_info=True)
+            raise
 
     def forward(self, z: Tensor) -> Tensor:
         """Decode features to audio.

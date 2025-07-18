@@ -12,12 +12,12 @@ The system uses neural networks for generation, detection, and localization of w
 # Standard library imports
 import logging
 import os
-import traceback
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 # Third-party imports
 import torch
 import yaml
+import numpy as np
 from audiotools import AudioSignal
 
 # Local imports
@@ -310,6 +310,24 @@ class AudioWatermarking(torch.nn.Module):
             RuntimeError: If forward pass fails during processing
             ValueError: If phase is not recognized
         """
+        # ------------------------------------------------------------------
+        # Ensure the message tensor has the same batch size as the signal.
+        # DataParallel replicates AudioSignal objects (not split), but splits
+        # tensors on the batch dimension. If this model is wrapped in
+        # DataParallel, msg may have been split while signal has not, leading
+        # to mismatched batch sizes.
+        # ------------------------------------------------------------------
+        expected_bs = signal.batch_size if isinstance(signal, AudioSignal) else signal.shape[0]
+
+        if msg.size(0) != expected_bs:
+            if msg.size(0) == 1:
+                # Broadcast single message to entire batch
+                msg = msg.expand(expected_bs, -1)
+            else:
+                # Repeat / truncate to match
+                reps = int(np.ceil(expected_bs / msg.size(0)))
+                msg = msg.repeat(reps, 1)[:expected_bs]
+
         if phase == 'train':
             return self._forward_train(signal, msg)
         elif phase == 'audio_sample':

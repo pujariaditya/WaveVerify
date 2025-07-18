@@ -21,7 +21,6 @@ import gc
 import logging
 import os
 import sys
-import traceback
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +34,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import wandb
+from wandb.sdk.wandb_run import Run
 from audiotools import ml
 from audiotools.core import util
 from audiotools.data import transforms
@@ -53,7 +53,7 @@ sys.path.insert(0, project_root)
 
 from model import AudioWatermarking, Detector, Discriminator, Generator, Locator
 import evaluate
-import loss
+from scripts import loss
 
 # =============================================================================
 # TYPE DEFINITIONS
@@ -139,7 +139,7 @@ MAX_GRADIENT_NORM: float = 10.0
 DEFAULT_MESSAGE_LENGTH: int = 16
 DEFAULT_SAMPLE_FREQ: int = 10000
 DEFAULT_VALID_FREQ: int = 1000
-DEFAULT_SAVE_PATH: str = "ckpt"
+DEFAULT_SAVE_PATH: str = "checkpoint"
 DEFAULT_SEED: int = 0
 
 # Message generation constants
@@ -176,14 +176,15 @@ AUDIO_SAMPLE_TYPES: List[str] = ["original_signal", "recons", "watermarked_signa
 # =============================================================================
 # Bind optimizers with argbind for configuration management
 AdamW = argbind.bind(torch.optim.AdamW, "generator", "detector", "locator", "discriminator")
+# Bind the Accelerator from audiotools
 Accelerator = argbind.bind(ml.Accelerator, without_prefix=True)
 
 
 @argbind.bind("generator", "discriminator")
 def ExponentialLR(
-    optimizer: optim.Optimizer, 
-    gamma: float = 1.0
-) -> optim.lr_scheduler.ExponentialLR:
+    optimizer, 
+    gamma = 1.0
+):
     """Create an exponential learning rate scheduler.
     
     Args:
@@ -241,15 +242,15 @@ evaluation = argbind.bind_module(evaluate, filter_fn=eval_filter_fn)
 # UTILITY FUNCTIONS
 # =============================================================================
 def unwrap_model(model: nn.Module) -> nn.Module:
-    """Unwrap model from DistributedDataParallel wrapper if necessary.
+    """Unwrap model from DataParallel or DistributedDataParallel wrapper if necessary.
     
     Args:
-        model: Model that may be wrapped in DDP
+        model: Model that may be wrapped in DataParallel or DDP
         
     Returns:
         Unwrapped model instance
     """
-    if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+    if isinstance(model, (torch.nn.parallel.DistributedDataParallel, torch.nn.DataParallel)):
         return model.module
     return model
 
@@ -420,11 +421,11 @@ def get_infinite_loader(dataloader: DataLoader) -> Iterator[BatchData]:
 
 @argbind.bind("train", "val")
 def build_transform(
-    augment_prob: float = 1.0,
-    preprocess: List[str] = ["Identity"],
-    augment: List[str] = ["Identity"],
-    postprocess: List[str] = ["Identity"],
-) -> transforms.Compose:
+    augment_prob = 1.0,
+    preprocess = ["Identity"],
+    augment = ["Identity"],
+    postprocess = ["Identity"],
+):
     """Build a transform pipeline for audio data.
     
     Creates a composed transform with preprocessing, augmentation, and postprocessing stages.
@@ -459,9 +460,9 @@ def build_transform(
 
 @argbind.bind("train", "val", "test")
 def build_dataset(
-    sample_rate: int,
-    folders: Optional[Dict[str, List[str]]] = None,
-) -> ConcatDataset:
+    sample_rate,
+    folders = None,
+):
     """Build a concatenated dataset from multiple audio folders.
     
     Creates individual datasets for each folder group and concatenates them.
@@ -494,6 +495,21 @@ def build_dataset(
     # Concatenate all datasets
     concatenated_dataset = ConcatDataset(datasets)
     concatenated_dataset.transform = transform  # Store transform for reference
+    
+    # Verify dataset is accessible
+    try:
+        if len(concatenated_dataset) > 0:
+            _ = concatenated_dataset[0]
+            logger.info(
+                "Dataset successfully created with %d samples", 
+                len(concatenated_dataset)
+            )
+    except (ZeroDivisionError, IndexError) as e:
+        logger.warning(
+            "Dataset appears empty or inaccessible: %s. "
+            "Please check that audio files exist in the configured directories.",
+            e
+        )
     
     return concatenated_dataset
 
@@ -761,14 +777,14 @@ def _initialize_losses() -> Tuple[losses.L1Loss, losses.MultiScaleSTFTLoss, loss
     waveform_loss = losses.L1Loss()  # L1 loss on raw waveforms
     stft_loss = losses.MultiScaleSTFTLoss()  # Multi-scale STFT loss
     mel_loss = losses.MelSpectrogramLoss()  # Mel-spectrogram loss
-    gan_loss = losses.GANLoss()  # Placeholder - discriminator added in load()
+    gan_loss = None  # Placeholder - discriminator added in load()
     loc_loss = losses.LocalizationLoss()  # Localization loss for watermark position
     dec_loss = losses.DecodingLoss()  # Decoding loss for message extraction
     
     return waveform_loss, stft_loss, mel_loss, gan_loss, loc_loss, dec_loss
 
 
-def _initialize_evaluation_metrics(sample_rate: int) -> Tuple[evaluation.PESQ, evaluation.STOI, 
+def _initialize_evaluation_metrics(sample_rate) -> Tuple[evaluation.PESQ, evaluation.STOI, 
                                                               evaluation.SISNR, evaluation.BER]:
     """Initialize evaluation metrics.
     
@@ -788,14 +804,14 @@ def _initialize_evaluation_metrics(sample_rate: int) -> Tuple[evaluation.PESQ, e
 
 @argbind.bind(without_prefix=True)
 def load(
-    args: ConfigDict,
-    accel: ml.Accelerator,
-    tracker: Tracker,
-    save_path: PathType,
-    resume: bool = False,
-    tag: str = "latest",
-    map_location: Optional[DeviceType] = None,
-) -> State:
+    args,
+    accel,
+    tracker,
+    save_path,
+    resume = False,
+    tag = "latest",
+    map_location = None,
+):
     """Load models and create training state.
     
     Initializes all models, optimizers, schedulers, loss functions, and datasets.
@@ -853,6 +869,13 @@ def load(
     audiowatermarking_model = accel.prepare_model(audiowatermarking_model)
     discriminator = accel.prepare_model(discriminator)
     
+    # Log device placement for debugging
+    logger.info(f"Models prepared on device: {accel.device}")
+    if hasattr(audiowatermarking_model, 'device_ids'):
+        logger.info(f"AudioWatermarking model using devices: {audiowatermarking_model.device_ids}")
+    if hasattr(discriminator, 'device_ids'):
+        logger.info(f"Discriminator using devices: {discriminator.device_ids}")
+    
     # Initialize optimizers and schedulers
     optimizer, scheduler, optimizer_d, scheduler_d = _initialize_optimizers(
         audiowatermarking_model, discriminator, args, accel,
@@ -878,11 +901,24 @@ def load(
     # Initialize loss functions
     waveform_loss, stft_loss, mel_loss, gan_loss_base, loc_loss, dec_loss = _initialize_losses()
     
+    # Move loss functions to device
+    waveform_loss = waveform_loss.to(accel.device)
+    stft_loss = stft_loss.to(accel.device)
+    mel_loss = mel_loss.to(accel.device)
+    loc_loss = loc_loss.to(accel.device)
+    dec_loss = dec_loss.to(accel.device)
+    
     # Create GAN loss with discriminator
     gan_loss = losses.GANLoss(discriminator)
     
     # Initialize evaluation metrics
     pesq_eval, stoi_eval, sisnr_eval, ber_eval = _initialize_evaluation_metrics(sample_rate)
+    
+    # Move evaluation metrics to device
+    pesq_eval = pesq_eval.to(accel.device)
+    stoi_eval = stoi_eval.to(accel.device)
+    sisnr_eval = sisnr_eval.to(accel.device)
+    ber_eval = ber_eval.to(accel.device)
 
     return State(
         audiowatermarking_model= audiowatermarking_model,
@@ -1083,13 +1119,22 @@ def val_loop(
         phase = "valid"
         
         # Apply validation transforms (typically less aggressive than training)
-        signal = state.val_data.transform(
+        from audiotools import AudioSignal
+        signal_tensor = state.val_data.transform(
             batch["signal"].clone(), **batch["transform_args"]
         )
+
+        if isinstance(signal_tensor, AudioSignal):
+            signal = signal_tensor.to(accel.device)
+            batch_sz = signal.batch_size
+        else:
+            sample_rate = unwrap_model(state.audiowatermarking_model).generator.sample_rate
+            signal = AudioSignal(signal_tensor, sample_rate=sample_rate).to(accel.device)
+            batch_sz = signal.batch_size
         
         # Generate random binary messages for watermark validation
         message = generate_random_message(
-            signal.shape[0], DEFAULT_MESSAGE_LENGTH, accel.device
+            batch_sz, DEFAULT_MESSAGE_LENGTH, accel.device
         )
         
         # Forward pass through model
@@ -1170,15 +1215,27 @@ def _prepare_training_batch(
     
     with torch.no_grad():
         # Apply data augmentation transforms to increase robustness
-        signal = state.train_data.transform(
+        signal_tensor = state.train_data.transform(
             batch["signal"].clone(), **batch["transform_args"]
         )
-        
+
+        # Import lazily to avoid circular deps
+        from audiotools import AudioSignal
+
+        # If transform already returns AudioSignal we simply move it to device.
+        if isinstance(signal_tensor, AudioSignal):
+            signal = signal_tensor.to(accel.device)
+            batch_sz = signal.batch_size
+        else:
+            sample_rate = unwrap_model(state.audiowatermarking_model).generator.sample_rate
+            signal = AudioSignal(signal_tensor, sample_rate=sample_rate).to(accel.device)
+            batch_sz = signal.batch_size
+
         # Generate random binary messages for watermark embedding
         message = generate_random_message(
-            signal.shape[0], DEFAULT_MESSAGE_LENGTH, accel.device
+            batch_sz, DEFAULT_MESSAGE_LENGTH, accel.device
         )
-    
+
     return signal, message
 
 
@@ -1490,7 +1547,8 @@ def checkpoint(
 def save_samples(
     state: State, 
     val_idx: List[int], 
-    writer: SummaryWriter
+    writer: SummaryWriter,
+    accel: ml.Accelerator
 ) -> None:
     """Save audio samples to TensorBoard and WandB.
     
@@ -1498,6 +1556,7 @@ def save_samples(
         state: Current training state
         val_idx: Indices of validation samples to save
         writer: TensorBoard summary writer
+        accel: Accelerator for device management
         
     Raises:
         RuntimeError: If sample generation fails
@@ -1508,19 +1567,57 @@ def save_samples(
         phase = AUDIO_SAMPLE_PHASE
         state.audiowatermarking_model.eval()
         
-        # Collect validation samples
-        samples = [state.val_data[idx] for idx in val_idx]
+        # ------------------------------------------------------------------
+        # Validate dataset availability and requested indices
+        # ------------------------------------------------------------------
+        dataset_len: int = len(state.val_data)
+
+        # Skip if validation dataset contains no samples
+        if dataset_len == 0:
+            logger.warning("Validation dataset is empty. Skipping save_samples().")
+            return
+
+        # Filter out indices that are outside the dataset range
+        valid_indices = [idx for idx in val_idx if 0 <= idx < dataset_len]
+
+        if not valid_indices:
+            logger.warning(
+                "No valid indices found for save_samples() (requested %s, dataset size %d). Skipping.",
+                val_idx,
+                dataset_len,
+            )
+            return
+
+        # Collect validation samples safely
+        try:
+            samples = [state.val_data[idx] for idx in valid_indices]
+        except (ZeroDivisionError, IndexError) as e:
+            logger.error(
+                "Failed to access validation samples: %s. Dataset may be empty or misconfigured.", 
+                e
+            )
+            return
+            
         batch = state.val_data.collate(samples)
         batch = util.prepare_batch(batch, accel.device)
         
         # Apply transforms
-        signal = state.train_data.transform(
+        signal_tensor = state.train_data.transform(
             batch["signal"].clone(), **batch["transform_args"]
         )
+
+        from audiotools import AudioSignal
+        if isinstance(signal_tensor, AudioSignal):
+            signal = signal_tensor.to(accel.device)
+            batch_sz = signal.batch_size
+        else:
+            sample_rate = unwrap_model(state.audiowatermarking_model).generator.sample_rate
+            signal = AudioSignal(signal_tensor, sample_rate=sample_rate).to(accel.device)
+            batch_sz = signal.batch_size
         
         # Generate random messages
         message = generate_random_message(
-            signal.shape[0], DEFAULT_MESSAGE_LENGTH, accel.device
+            batch_sz, DEFAULT_MESSAGE_LENGTH, accel.device
         )
         
         # Generate watermarked samples
@@ -1558,8 +1655,13 @@ def save_samples(
                     safe_wandb_log(audio_metrics)
                         
     except Exception as e:
-        logger.error(f"Failed to save audio samples: {str(e)}", exc_info=True)
-        raise ValidationError("Audio sample generation failed") from e 
+        # Do not crash the entire training run if sample saving fails.
+        # Log the error and continue training.
+        logger.error(
+            f"Failed to save audio samples: {str(e)}. Skipping save_samples() for this step.",
+            exc_info=True,
+        )
+        # Note: we intentionally do NOT raise ValidationError here to allow training to continue.
 
 def validate(
     state: State, 
@@ -1578,35 +1680,56 @@ def validate(
     Returns:
         Dictionary of aggregated validation metrics
     """
-    for batch in val_dataloader:
-        output = val_loop(batch, state, accel, lambdas)
+    # ------------------------------------------------------------------
+    # Gracefully handle the case where the validation dataset is empty.
+    # ------------------------------------------------------------------
+    if len(state.val_data) == 0:
+        logger.warning("Validation dataset is empty. Skipping validation step.")
+        return {}
+
+    last_output: MetricsDict | None = None
+
+    try:
+        for batch in val_dataloader:
+            last_output = val_loop(batch, state, accel, lambdas)
+    except (ZeroDivisionError, RuntimeError) as e:
+        logger.error(
+            "Validation failed with error: %s. Dataset may be empty or misconfigured.",
+            e
+        )
+        return {}
 
     # Consolidate state dicts if using ZeroRedundancyOptimizer
     if hasattr(state.optimizer, "consolidate_state_dict"):
         state.optimizer.consolidate_state_dict()
         state.optimizer_d.consolidate_state_dict()
 
-    return output
+    # last_output may be None if dataloader yielded no batches for some reason
+    if last_output is None:
+        logger.warning("Validation dataloader produced no batches. Skipping metrics aggregation.")
+        return {}
+
+    return last_output
 
 # =============================================================================
 # MAIN TRAINING FUNCTION
 # =============================================================================
 @argbind.bind(without_prefix=True)
 def train(
-    args: ConfigDict,
-    accel: ml.Accelerator,
-    seed: int = DEFAULT_SEED,
-    save_path: PathType = DEFAULT_SAVE_PATH,
-    num_iters: int = DEFAULT_NUM_ITERS,
-    save_iters: List[int] = DEFAULT_SAVE_ITERS,
-    sample_freq: int = DEFAULT_SAMPLE_FREQ,
-    valid_freq: int = DEFAULT_VALID_FREQ,
-    batch_size: int = DEFAULT_BATCH_SIZE,
-    val_batch_size: int = DEFAULT_VAL_BATCH_SIZE,
-    num_workers: int = DEFAULT_NUM_WORKERS,
-    val_idx: List[int] = [0, 1, 2, 3, 4, 5],
-    lambdas: LossWeights = DEFAULT_LOSS_WEIGHTS,
-) -> None:
+    args,
+    accel,
+    seed = DEFAULT_SEED,
+    save_path = DEFAULT_SAVE_PATH,
+    num_iters = DEFAULT_NUM_ITERS,
+    save_iters = DEFAULT_SAVE_ITERS,
+    sample_freq = DEFAULT_SAMPLE_FREQ,
+    valid_freq = DEFAULT_VALID_FREQ,
+    batch_size = DEFAULT_BATCH_SIZE,
+    val_batch_size = DEFAULT_VAL_BATCH_SIZE,
+    num_workers = DEFAULT_NUM_WORKERS,
+    val_idx = [0, 1, 2, 3, 4, 5],
+    lambdas = DEFAULT_LOSS_WEIGHTS,
+):
     """Main training loop for audio watermarking.
     
     Args:
@@ -1695,7 +1818,7 @@ def train(
             
             # Save audio samples at specified frequency
             if tracker.step % sample_freq == 0 or is_last_iteration:
-                save_samples(state, val_idx, writer)
+                save_samples(state, val_idx, writer, accel)
             
             # Run validation at specified frequency
             if tracker.step % valid_freq == 0 or is_last_iteration:
@@ -1711,7 +1834,7 @@ def train(
             
 
 @argbind.bind(without_prefix=True)
-def setup_run(args: ConfigDict) -> wandb.Run:
+def setup_run(args):
     """Initialize WandB run for experiment tracking.
     
     Args:

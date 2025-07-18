@@ -40,4 +40,8 @@ compare/miou_by_removal_percentage.pdf
 
 compare/research_comparison.pdf
 
+checkpoints/
+docs/
 
+
+train.logs

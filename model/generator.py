@@ -172,6 +172,8 @@ class Generator(BaseModel):
                        f"hop_length={self.hop_length}")
             
             # Initialize encoder with watermark embedding capability
+            # Note: embedding_dim and embedding_layers might not be in config
+            # but are required for msg_embedding functionality
             self.encoder = m.SEANetEncoder(
                 channels=channels_audio,
                 dimension=dimension,
@@ -306,7 +308,18 @@ class Generator(BaseModel):
             RuntimeError: If encoding fails
         """
         try:
-            logger.debug(f"Encoding audio with shape {audio_data.shape} and message shape {msg.shape}")
+            # ------------------------------------------------------------------
+            # Use input tensor's device for all operations
+            # ------------------------------------------------------------------
+            device = audio_data.device
+
+            if msg.device != device:
+                msg = msg.to(device)
+
+            logger.debug(
+                f"Encoding audio with shape {audio_data.shape} on {audio_data.device} "
+                f"and message shape {msg.shape} on {msg.device}"
+            )
             
             # Encode audio with watermark message
             latent_codes = self.encoder(audio_data, msg)
@@ -369,7 +382,18 @@ class Generator(BaseModel):
             # Validate inputs
             if not isinstance(audio_signal, AudioSignal):
                 raise ValueError("Input must be an AudioSignal object")
-            
+
+            # Use input tensor's device for all operations
+            device = audio_signal.audio_data.device
+
+            # Move AudioSignal to ensure consistency
+            if audio_signal.device != device:
+                audio_signal = audio_signal.to(device)
+
+            # Ensure message tensor is on the same device
+            if msg.device != device:
+                msg = msg.to(device)
+
             # Extract audio data and original length
             original_length = audio_signal.audio_data.shape[-1]
             audio_data = audio_signal.audio_data
@@ -501,7 +525,8 @@ def test_watermark_generation(model: Generator, device: str = "cpu") -> None:
         # Generate random audio signal
         test_audio_signal = AudioSignal(
             torch.randn(1, 1, test_length),
-            sample_rate=test_sample_rate
+            sample_rate=test_sample_rate,
+            device=device
         )
         
         # Generate random 16-bit watermark message

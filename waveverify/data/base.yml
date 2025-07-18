@@ -40,9 +40,6 @@ Generator:
   zero_init: true
   inout_norm: true
   nbits: 16
-  embedding_dim: 64
-  embedding_layers: 2
-  freq_bands: 4
 
 
 Locator:
@@ -129,7 +126,7 @@ AdamW.betas: [0.8, 0.99]
 AdamW.lr: 0.0001 
 ExponentialLR.gamma: 0.999996
 
-val_batch_size: 16
+val_batch_size: 20
 device: cuda
 num_iters: 600000
 save_iters: [10000, 50000, 100000, 150000, 160000, 170000, 180000, 190000, 200000, 210000, 220000, 230000, 240000, 250000, 260000, 270000, 280000, 290000, 300000, 310000, 320000, 330000, 340000, 350000, 360000, 370000, 380000, 390000, 400000, 410000, 420000, 430000, 440000, 450000, 460000, 470000, 480000, 490000, 500000, 510000, 520000, 530000, 540000, 550000, 560000, 570000, 580000, 590000, 599999]
@@ -175,32 +172,6 @@ test/AudioDataset.n_examples: 1000
 AudioLoader.shuffle: true
 AudioDataset.without_replacement: true
 
-AudioLoader.ext: ['.wav', '.flac', '.mp3', '.mp4', '.ogg']
+    
 
-# Primary dataset configuration
-train/build_dataset.folders:
-  libri_speech:
-    - # TODO: add training dataset folder path
-
-  common_voice:
-    - # TODO: add training dataset folder path
-
-  dipco:
-    - # TODO: add training dataset folder path
-
-  cmu_arctic:
-    - # TODO: add training dataset folder path
-
-val/build_dataset.folders:
-  libri_speech:
-    - # TODO: add validation dataset folder path
-
-  common_voice:
-    - # TODO: add validation dataset folder path
-
-  dipco:
-    - # TODO: add validation dataset folder path
-
-  cmu_arctic:
-    - # TODO: add validation dataset folder path
     
