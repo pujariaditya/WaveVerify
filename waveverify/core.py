@@ -18,6 +18,7 @@ from typing import Any, Dict, Optional, Tuple, Union
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.utils.parametrize as parametrize
 import argbind
 from audiotools import AudioSignal
 
@@ -112,6 +113,74 @@ class WaveVerify:
         else:
             return torch.device(device)
     
+    def _remove_parametrizations_from_model(self, model: nn.Module) -> None:
+        """Remove parametrizations from a model for loading clean checkpoints.
+        
+        This function removes parametrizations from model modules to make them
+        compatible with checkpoints that were saved with parametrizations removed.
+        
+        Args:
+            model: Model to remove parametrizations from
+        """
+        removed_count = 0
+        
+        # Find all parametrized modules
+        for name, module in model.named_modules():
+            if hasattr(module, 'parametrizations') and hasattr(module.parametrizations, 'weight'):
+                try:
+                    # Remove parametrization
+                    parametrize.remove_parametrizations(module, 'weight')
+                    removed_count += 1
+                    logger.debug(f"Removed parametrization from {name}")
+                except Exception as e:
+                    logger.warning(f"Failed to remove parametrization from {name}: {e}")
+        
+        if removed_count > 0:
+            logger.info(f"Removed parametrizations from {removed_count} modules for checkpoint compatibility")
+    
+    def _find_atomic_checkpoint_file(self, checkpoint_path: Path) -> Path:
+        """Find the atomic checkpoint file in the given path.
+        
+        Args:
+            checkpoint_path: Path to checkpoint file or directory
+            
+        Returns:
+            Path to the atomic checkpoint file
+            
+        Raises:
+            FileNotFoundError: If no atomic checkpoint file is found
+        """
+        if checkpoint_path.is_file() and checkpoint_path.suffix == '.pth':
+            return checkpoint_path
+        else:
+            # Look for atomic checkpoint files in directory
+            atomic_files = list(checkpoint_path.glob('*.pth'))
+            if not atomic_files:
+                raise FileNotFoundError(f"No atomic checkpoint files found in {checkpoint_path}")
+            
+            # Try best.pth first, then latest.pth, then any other
+            for preferred in ['best.pth', 'latest.pth']:
+                for pth_file in atomic_files:
+                    if pth_file.name == preferred:
+                        return pth_file
+            
+            # Return first available
+            return atomic_files[0]
+    
+    def _convert_spec_keys(self, state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Pass through state dict without conversion.
+        
+        Since we're now saving with the correct configuration during training,
+        spec parameters should match between checkpoint and model.
+        
+        Args:
+            state_dict: State dict from checkpoint
+            
+        Returns:
+            Same state dict without modification
+        """
+        return state_dict
+    
     def _resolve_checkpoint_path(self, checkpoint: str) -> Path:
         """
         Resolve checkpoint path from name or path string.
@@ -138,10 +207,13 @@ class WaveVerify:
     
     def _load_model(self, checkpoint_path: Path) -> AudioWatermarking:
         """
-        Load AudioWatermarking model from checkpoint with proper configuration.
+        Load AudioWatermarking model from checkpoint with automatic format detection.
+        
+        Supports both atomic checkpoint format (single .pth file) and legacy 
+        multi-file format for backward compatibility.
         
         Args:
-            checkpoint_path: Path to checkpoint directory
+            checkpoint_path: Path to checkpoint directory or atomic checkpoint file
             
         Returns:
             AudioWatermarking: Loaded and configured model
@@ -150,8 +222,42 @@ class WaveVerify:
             RuntimeError: If model loading fails
         """
         try:
-            # Load and apply configuration
-            config = initialize_models_with_config()
+            # Detect checkpoint format first
+            if self._is_atomic_checkpoint(checkpoint_path):
+                logger.info("Detected atomic checkpoint format")
+                # Try to load configuration from checkpoint
+                atomic_file = self._find_atomic_checkpoint_file(checkpoint_path)
+                checkpoint = torch.load(atomic_file, map_location='cpu')
+                checkpoint_config = checkpoint.get('config', None)
+                
+                if checkpoint_config is not None:
+                    logger.info(f"Using configuration from checkpoint ({len(checkpoint_config)} parameters)")
+                    # Use the checkpoint configuration directly
+                    config = checkpoint_config
+                elif checkpoint_path.name == "base":
+                    # Fallback to base configuration
+                    config_path = Path(__file__).parent.parent / "conf" / "base.yml"
+                    if config_path.exists():
+                        logger.info(f"Loading configuration from: {config_path}")
+                        config = initialize_models_with_config(config_path)
+                    else:
+                        logger.warning("Base configuration not found, using default")
+                        config = initialize_models_with_config()
+                else:
+                    # Use default configuration
+                    config = initialize_models_with_config()
+            else:
+                # Legacy checkpoint - use default or inferred configuration
+                if checkpoint_path.name == "base":
+                    config_path = Path(__file__).parent.parent / "conf" / "base.yml"
+                    if config_path.exists():
+                        logger.info(f"Loading configuration from: {config_path}")
+                        config = initialize_models_with_config(config_path)
+                    else:
+                        logger.warning("Base configuration not found, using default")
+                        config = initialize_models_with_config()
+                else:
+                    config = initialize_models_with_config()
             
             # Import model classes directly from model module  
             from model.generator import Generator as GeneratorBase
@@ -172,8 +278,13 @@ class WaveVerify:
             # Create AudioWatermarking composite model
             model = AudioWatermarking(generator, detector, locator)
             
-            # Load individual component weights
-            self._load_component_weights(model, checkpoint_path)
+            # Detect checkpoint format and load accordingly
+            if self._is_atomic_checkpoint(checkpoint_path):
+                logger.info("Detected atomic checkpoint format")
+                self._load_atomic_checkpoint(model, checkpoint_path)
+            else:
+                logger.info("Detected legacy multi-file checkpoint format")
+                self._load_legacy_checkpoint(model, checkpoint_path)
             
             return model
             
@@ -181,125 +292,182 @@ class WaveVerify:
             logger.error(f"Failed to load model: {str(e)}", exc_info=True)
             raise RuntimeError(f"Model loading failed: {str(e)}") from e
     
-    def _load_component_weights(self, model: AudioWatermarking, checkpoint_path: Path) -> None:
+    def _is_atomic_checkpoint(self, checkpoint_path: Path) -> bool:
         """
-        Load weights for individual model components.
+        Detect if checkpoint is in atomic format (single .pth file) or legacy format.
         
         Args:
-            model: AudioWatermarking model instance
-            checkpoint_path: Path to checkpoint directory
+            checkpoint_path: Path to checkpoint directory or file
+            
+        Returns:
+            True if atomic format, False if legacy format
         """
-        # Component paths mapping
-        components = {
-            "generator": (model.generator, checkpoint_path / "generator" / "model.pth"),
-            "detector": (model.detector, checkpoint_path / "detector" / "model.pth"),
-            "locator": (model.locator, checkpoint_path / "locator" / "model.pth")
-        }
+        # Check for atomic checkpoint patterns
+        if checkpoint_path.is_file() and checkpoint_path.suffix == '.pth':
+            return True
         
-        for component_name, (component_model, weight_path) in components.items():
-            try:
+        # Check for potential atomic checkpoint files in directory
+        if checkpoint_path.is_dir():
+            atomic_files = list(checkpoint_path.glob('*.pth'))
+            if atomic_files:
+                # Check if any .pth file contains atomic structure
+                for pth_file in atomic_files:
+                    try:
+                        checkpoint = torch.load(pth_file, map_location='cpu')
+                        if isinstance(checkpoint, dict) and 'models' in checkpoint:
+                            return True
+                    except Exception:
+                        continue
+        
+        return False
+    
+    def _load_atomic_checkpoint(self, model: AudioWatermarking, checkpoint_path: Path) -> None:
+        """
+        Load model from atomic checkpoint format (single .pth file).
+        
+        Args:
+            model: AudioWatermarking model to load weights into
+            checkpoint_path: Path to checkpoint file or directory containing atomic checkpoint
+            
+        Raises:
+            RuntimeError: If atomic checkpoint loading fails
+        """
+        try:
+            # Find the atomic checkpoint file
+            if checkpoint_path.is_file() and checkpoint_path.suffix == '.pth':
+                atomic_file = checkpoint_path
+            else:
+                # Look for atomic checkpoint files in directory
+                atomic_files = list(checkpoint_path.glob('*.pth'))
+                if not atomic_files:
+                    raise FileNotFoundError(f"No atomic checkpoint files found in {checkpoint_path}")
+                
+                # Try to find a valid atomic checkpoint
+                atomic_file = None
+                for pth_file in atomic_files:
+                    try:
+                        checkpoint = torch.load(pth_file, map_location='cpu')
+                        if isinstance(checkpoint, dict) and 'models' in checkpoint:
+                            atomic_file = pth_file
+                            break
+                    except Exception:
+                        continue
+                
+                if atomic_file is None:
+                    raise FileNotFoundError(f"No valid atomic checkpoint found in {checkpoint_path}")
+            
+            logger.info(f"Loading atomic checkpoint from: {atomic_file}")
+            
+            # Load checkpoint data
+            checkpoint = torch.load(atomic_file, map_location='cpu')
+            
+            # Validate checkpoint structure
+            if not isinstance(checkpoint, dict) or 'models' not in checkpoint:
+                raise ValueError("Invalid atomic checkpoint format - missing 'models' key")
+            
+            models = checkpoint['models']
+            
+            # Remove parametrizations from fresh models to match checkpoint format
+            logger.info("Removing parametrizations from fresh models for checkpoint compatibility")
+            self._remove_parametrizations_from_model(model.generator)
+            self._remove_parametrizations_from_model(model.detector)
+            self._remove_parametrizations_from_model(model.locator)
+            
+            # Load model components - use strict=False to handle configuration mismatches
+            if 'generator' in models:
+                generator_state = self._convert_spec_keys(models['generator'])
+                missing_keys, unexpected_keys = model.generator.load_state_dict(generator_state, strict=False)
+                logger.info("Loaded generator from atomic checkpoint")
+                if missing_keys:
+                    logger.warning(f"Generator missing keys: {len(missing_keys)} keys")
+                if unexpected_keys:
+                    logger.warning(f"Generator unexpected keys: {len(unexpected_keys)} keys")
+            else:
+                logger.warning("Generator not found in atomic checkpoint")
+            
+            if 'detector' in models:
+                detector_state = self._convert_spec_keys(models['detector'])
+                missing_keys, unexpected_keys = model.detector.load_state_dict(detector_state, strict=False)
+                logger.info("Loaded detector from atomic checkpoint")
+                if missing_keys:
+                    logger.warning(f"Detector missing keys: {len(missing_keys)} keys")
+                if unexpected_keys:
+                    logger.warning(f"Detector unexpected keys: {len(unexpected_keys)} keys")
+            else:
+                logger.warning("Detector not found in atomic checkpoint")
+            
+            if 'locator' in models:
+                locator_state = self._convert_spec_keys(models['locator'])
+                missing_keys, unexpected_keys = model.locator.load_state_dict(locator_state, strict=False)
+                logger.info("Loaded locator from atomic checkpoint")
+                if missing_keys:
+                    logger.warning(f"Locator missing keys: {len(missing_keys)} keys")
+                if unexpected_keys:
+                    logger.warning(f"Locator unexpected keys: {len(unexpected_keys)} keys")
+            else:
+                logger.warning("Locator not found in atomic checkpoint")
+            
+            # Log checkpoint metadata
+            if 'step' in checkpoint:
+                logger.info(f"Loaded checkpoint from training step: {checkpoint['step']}")
+            
+            # Check if checkpoint contains configuration
+            config = checkpoint.get('config', None)
+            if config is not None:
+                logger.info(f"Found configuration in checkpoint with {len(config)} parameters")
+            
+            logger.info("Successfully loaded atomic checkpoint")
+            
+            # Return the configuration if present
+            return config
+            
+        except Exception as e:
+            logger.error(f"Failed to load atomic checkpoint: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Atomic checkpoint loading failed: {str(e)}") from e
+    
+    def _load_legacy_checkpoint(self, model: AudioWatermarking, checkpoint_path: Path) -> None:
+        """
+        Load model from legacy multi-file checkpoint format.
+        
+        Args:
+            model: AudioWatermarking model to load weights into
+            checkpoint_path: Path to checkpoint directory
+            
+        Raises:
+            RuntimeError: If legacy checkpoint loading fails
+        """
+        try:
+            # Component paths mapping
+            components = {
+                "generator": (model.generator, checkpoint_path / "generator" / "model.pth"),
+                "detector": (model.detector, checkpoint_path / "detector" / "model.pth"),
+                "locator": (model.locator, checkpoint_path / "locator" / "model.pth")
+            }
+            
+            for component_name, (component_model, weight_path) in components.items():
                 if weight_path.exists():
                     logger.info(f"Loading {component_name} from {weight_path}")
                     state_dict = torch.load(weight_path, map_location="cpu")
                     
-                    # Handle weight normalization parametrizations
-                    state_dict = self._fix_weight_norm_state_dict(state_dict)
-                    
-                    # Load with strict=False to ignore missing keys
-                    missing_keys, unexpected_keys = component_model.load_state_dict(state_dict, strict=False)
-                    
-                    if missing_keys:
-                        logger.warning(f"{component_name} missing keys: {len(missing_keys)}")
-                        # Show all missing keys for debugging
-                        for key in missing_keys:
-                            logger.debug(f"  Missing: {key}")
-                    if unexpected_keys:
-                        logger.warning(f"{component_name} unexpected keys: {len(unexpected_keys)}")
-                        logger.debug(f"Unexpected: {unexpected_keys[:5]}...")  # Show first 5
-                        
-                    logger.info(f"Successfully loaded {component_name}")
-                    
-                    # Special handling for generator encoder msg_embedding
-                    if component_name == "generator" and hasattr(component_model, 'encoder'):
-                        encoder = component_model.encoder
-                        if not hasattr(encoder, 'msg_embedding') or encoder.msg_embedding is None:
-                            logger.warning("Generator encoder missing msg_embedding, adding it...")
-                            # Add msg_embedding layer
-                            import torch.nn as nn
-                            msg_dimension = 16
-                            embedding_dim = 64
-                            embedding_layers = 2
-                            
-                            embedding_mlp = []
-                            for _ in range(embedding_layers):
-                                embedding_mlp.append(nn.Linear(embedding_dim, embedding_dim))
-                                embedding_mlp.append(nn.ReLU())
-                            
-                            encoder.msg_embedding = nn.Sequential(
-                                nn.Linear(msg_dimension, embedding_dim),
-                                *embedding_mlp
-                            ).to(self.device)
-                            logger.info("Added msg_embedding to generator encoder")
-                            
+                    # Load with strict=True to catch any issues
+                    try:
+                        component_model.load_state_dict(state_dict, strict=True)
+                        logger.info(f"Successfully loaded {component_name} with strict loading")
+                    except RuntimeError as e:
+                        logger.error(f"Failed to load {component_name} with strict loading: {str(e)}")
+                        raise RuntimeError(
+                            f"Failed to load {component_name} due to checkpoint incompatibility. "
+                            f"This indicates the checkpoint was trained with a different model architecture."
+                        ) from e
                 else:
                     logger.warning(f"{component_name.capitalize()} checkpoint not found at {weight_path}")
-            except Exception as e:
-                logger.error(f"Failed to load {component_name}: {str(e)}", exc_info=True)
-    
-    def _fix_weight_norm_state_dict(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Fix state dict with weight normalization parametrizations.
-        
-        Converts parametrized weights back to regular weights by combining
-        the weight magnitude and direction components.
-        
-        Args:
-            state_dict: Original state dict with parametrizations
             
-        Returns:
-            Fixed state dict with regular weight tensors
-        """
-        fixed_state_dict = {}
-        processed_params = set()
-        
-        for key, value in state_dict.items():
-            # Check if this is a parametrized weight
-            if "parametrizations.weight.original0" in key:
-                # Extract base key
-                base_key = key.replace(".parametrizations.weight.original0", ".weight")
-                
-                # Skip if already processed
-                if base_key in processed_params:
-                    continue
-                    
-                # Get magnitude and direction components
-                magnitude_key = key
-                direction_key = key.replace("original0", "original1")
-                
-                if direction_key in state_dict:
-                    # Combine magnitude and direction
-                    magnitude = state_dict[magnitude_key]
-                    direction = state_dict[direction_key]
-                    # Weight normalization: weight = g * v / ||v||
-                    # original0 is typically magnitude (g), original1 is direction (v)
-                    weight = magnitude * direction
-                    fixed_state_dict[base_key] = weight
-                    processed_params.add(base_key)
-                else:
-                    # Just use the original value
-                    fixed_state_dict[base_key] = value
-                    
-            elif "parametrizations.weight.original1" in key:
-                # Skip, already handled with original0
-                continue
-            elif "parametrizations" not in key:
-                # Regular parameter, keep as is
-                fixed_state_dict[key] = value
-            else:
-                # Skip other parametrization keys
-                continue
-                
-        return fixed_state_dict
+            logger.info("Successfully loaded legacy checkpoint")
+            
+        except Exception as e:
+            logger.error(f"Failed to load legacy checkpoint: {str(e)}", exc_info=True)
+            raise RuntimeError(f"Legacy checkpoint loading failed: {str(e)}") from e
+    
     
     # =============================================================================
     # Public API Methods
@@ -353,8 +521,9 @@ class WaveVerify:
             # Embed watermark using model inference
             with torch.no_grad():
                 # Use audio_sample phase for inference mode
+                # Returns tuple: (reconstructed_signal, watermarked_signal)
                 outputs = self.model(audio_signal, message_tensor, phase='audio_sample')
-                watermarked_signal = outputs['augmented_signal']
+                _, watermarked_signal = outputs  # Get the watermarked signal
             
             # Extract audio data from signal wrapper
             watermarked_tensor = watermarked_signal.audio_data.squeeze(0)

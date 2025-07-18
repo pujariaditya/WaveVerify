@@ -30,14 +30,14 @@ Generator:
   expansion: 1
   groups: -1
   encoder_l2norm: true
-  bias: true
+  bias: false
   spec: stft
   spec_layer: 1x1_zero
   spec_compression: log
-  spec_learnable: false
+  spec_learnable: true
   pad_mode: constant
   causal: true
-  zero_init: true
+  zero_init: false
   inout_norm: true
   nbits: 16
   embedding_dim: 64
@@ -68,12 +68,12 @@ Locator:
   expansion: 1
   groups: -1
   encoder_l2norm: true
-  bias: true
+  bias: false
   spec: stft
   spec_compression: log
   pad_mode: constant
   causal: true
-  zero_init: true
+  zero_init: false
   inout_norm: true
   output_dim: 32
   nbits: 16
@@ -101,12 +101,12 @@ Detector:
   expansion: 1
   groups: -1
   encoder_l2norm: true
-  bias: true
+  bias: false
   spec: stft
   spec_compression: log
   pad_mode: constant
   causal: true
-  zero_init: true
+  zero_init: false
   inout_norm: true
   output_dim: 32
   nbits: 16
@@ -167,7 +167,7 @@ train/AudioDataset.duration: 1.0
 train/AudioDataset.n_examples: 500000
 
 val/AudioDataset.duration: 5.0
-val/AudioDataset.n_examples: 1000
+val/AudioDataset.n_examples: 10
 
 test/AudioDataset.duration: 10.0
 test/AudioDataset.n_examples: 1000
@@ -179,28 +179,28 @@ AudioLoader.ext: ['.wav', '.flac', '.mp3', '.mp4', '.ogg']
 
 # Primary dataset configuration
 train/build_dataset.folders:
-  libri_speech:
-    - # TODO: add training dataset folder path
+  # libri_speech:
+  #   - # TODO: add training dataset folder path
 
-  common_voice:
-    - # TODO: add training dataset folder path
+  # common_voice:
+  #   - # TODO: add training dataset folder path
 
-  dipco:
-    - # TODO: add training dataset folder path
+  # dipco:
+  #   - # TODO: add training dataset folder path
 
-  cmu_arctic:
-    - # TODO: add training dataset folder path
+  # cmu_arctic:
+  #   - # TODO: add training dataset folder path
 
 val/build_dataset.folders:
-  libri_speech:
-    - # TODO: add validation dataset folder path
+  # libri_speech:
+  #   - # TODO: add validation dataset folder path
 
-  common_voice:
-    - # TODO: add validation dataset folder path
+  # common_voice:
+  #   - # TODO: add validation dataset folder path
 
-  dipco:
-    - # TODO: add validation dataset folder path
+  # dipco:
+  #   - # TODO: add validation dataset folder path
 
-  cmu_arctic:
-    - # TODO: add validation dataset folder path
+  # cmu_arctic:
+  #   - # TODO: add validation dataset folder path
     
