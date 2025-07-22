@@ -1,61 +1,58 @@
-# WaveVerify
+# WaveVerify: A Novel Audio Watermarking Framework for Media Authentication and Combatting Deepfakes
 
-**A Novel Audio Watermarking Framework for Media Authentication and Combatting Deepfakes**
+[![Conference](https://img.shields.io/badge/IJCB-2025-blue)](https://ieee-biometrics.org/ijcb2025/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/release/python-380/)
+
+Official PyTorch implementation for **"WaveVerify: A Novel Audio Watermarking Framework for Media Authentication and Combatting Deepfakes"**, accepted at the IEEE International Joint Conference on Biometrics (IJCB) 2025.
+
+**Authors:** Aditya Pujari and Ajita Rattani  
+*University of North Texas*
+
+---
 
 ## Abstract
 
-With the rapid advancement of voice generation technologies capable of producing perceptually indistinguishable synthetic speech, the need for robust audio content authentication has become critical. WaveVerify addresses this challenge through an advanced watermarking system that leverages a FiLM-based generator for resilient multi-band watermark embedding and detectors for accurate extraction and localization.
+> With the rise of voice synthesis technology threatening digital media integrity, audio watermarking has become a crucial defense for content authentication. Despite advances, current solutions struggle with robustness against audio effects such as high-pass filtering and temporal modifications, and often suffer from poor watermark localization. We introduce **WaveVerify**, an advanced watermarking system that overcomes these limitations through a FiLM-based generator for resilient multiband watermark embedding and a Mixture-of-Experts detector for accurate extraction and localization. Our unified training framework enhances robustness by dynamically applying multiple distortions in a single backpropagation step through a dynamic effect scheduler, ensuring consistent performance across diverse audio environments. Evaluations across multiple datasets show that WaveVerify outperforms state-of-the-art models such as AudioSeal and WavMark, achieving zero Bit Error Rate (BER) under common distortions and Mean Intersection over Union (MIoU) scores of 0.98 or higher even under severe temporal modifications. Additionally, our FiLM-based generator architecture eliminates computational bottlenecks through parallel hierarchical modulation, reducing training time by approximately 80% compared to sequential bottleneck-based watermark embedding approaches while maintaining high performance. These results establish WaveVerify as a robust, efficient, and practical solution for real-world audio watermarking.
 
-## Key Features
+---
 
-- **Robust Watermarking**: Achieves zero Bit Error Rate (BER) under common distortions
-- **Superior Localization**: Mean Intersection over Union (MIoU) scores of 0.98+ even under severe temporal modifications
-- **Efficient Training**: 80% reduction in training time compared to sequential bottleneck-based approaches
-- **Multi-Band Embedding**: FiLM-based generator enables parallel hierarchical modulation
-- **Dynamic Distortion Handling**: Unified training framework with dynamic effect scheduler
+## Architecture Overview
 
-## Performance
+WaveVerify introduces a novel end-to-end approach for robust audio watermarking, integrating three synergistic components within a unified Audio Watermarking architecture.
 
-WaveVerify outperforms state-of-the-art models including AudioSeal and WavMark across multiple evaluation metrics:
-- Zero Bit Error Rate under common audio distortions
-- High-precision watermark localization with MIoU ≥ 0.98
-- Robust performance against high-pass filtering and temporal modifications
-- Significant computational efficiency improvements
+<p align="center">
+  <img src="assets/architecture.png" width="800" alt="WaveVerify Architecture">
+  <br>
+  <em>The end-to-end training pipeline of WaveVerify, where a FiLM-based generator embeds bits into speech, followed by temporal -> sequence -> effect augmentations, and extraction via a locator and detector.</em>
+</p>
 
-## Requirements
+At its core, the framework consists of:
 
-- Python 3.8+
-- PyTorch 1.9+
-- Additional dependencies listed in `requirements.txt`
+- **Generator**: Employs an encoder-decoder architecture with Feature-wise Linear Modulation (FiLM) for watermark embedding, enabling parallel hierarchical modulation
+- **Locator**: Enables precise sample-level identification of watermarked regions while maintaining minimal computational overhead (~0.13M parameters)
+- **Detector**: Utilizes a sophisticated specialized expert network (~4.5M parameters)
 
-## Installation
+---
 
-### Quick Install
+## Performance Highlights
 
-1. Clone and install the package:
-```bash
-git clone https://github.com/pujariaditya/WaveVerify.git
-cd WaveVerify
-pip install -e .
-```
+- **Zero Bit Error Rate (BER)** under common audio distortions
+- **Mean Intersection over Union (MIoU) ≥ 0.98** even under severe temporal modifications
+- **80% reduction in training time** compared to sequential bottleneck-based approaches
+- **Robust against temporal attacks** including reversal, circular shifting, and segment shuffling
+- **Superior performance under high-pass filtering** and combined audio effects
 
-### Manual Setup (Alternative)
-
-If you prefer manual setup without package installation:
-```bash
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-pip install -r requirements.txt
-```
+---
 
 ## Dataset Setup
 
 ### Supported Datasets
 
-- [LibriSpeech](https://www.openslr.org/12)
-- [Common Voice](https://commonvoice.mozilla.org/)
-- [CMU Arctic](http://www.festvox.org/cmu_arctic/)
-- [DIPCO](https://zenodo.org/records/8122551)
+- [LibriSpeech](https://www.openslr.org/12) - 1,000 hours of read English speech
+- [Common Voice](https://commonvoice.mozilla.org/) - 200 hours spanning 10 languages
+- [CMU Arctic](http://www.festvox.org/cmu_arctic/) - 20 hours of professional speech
+- [DIPCO](https://zenodo.org/records/8122551) - 40 hours of conversational speech
 
 ### Directory Structure
 
@@ -85,6 +82,26 @@ AudioDataset/
 
 Update the dataset folder path in `conf/base.yml` to point to your `AudioDataset/` directory.
 
+---
+
+## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- PyTorch 1.9+
+- CUDA-capable GPU (recommended)
+
+### Quick Install
+
+```bash
+git clone https://github.com/vcbsl/WaveVerify.git
+cd WaveVerify
+pip install -e .
+```
+
+---
+
 ## Usage
 
 ### Training
@@ -96,16 +113,11 @@ export CUDA_VISIBLE_DEVICES=0
 python scripts/train.py --args.load conf/base.yml --save_path checkpoints/runs/base/
 ```
 
+**Note**: The training script uses `argbind` for configuration management. The `--args.load` syntax loads the specified YAML configuration file.
+
 ### Inference
 
 WaveVerify is designed as a Python library for integrating audio watermarking into your applications. The pretrained checkpoint will be automatically downloaded on first use.
-
-#### Installation
-
-```python
-# Import the package
-from waveverify import WaveVerify
-```
 
 #### Basic Usage
 
@@ -122,12 +134,12 @@ license_wm = WatermarkID.for_license("CC-BY-4.0")
 tracking_wm = WatermarkID.for_tracking("order_12345")
 
 # Embed watermark (watermark ID is REQUIRED)
-audio, sr, watermark = wv.embed("input.wav", creator_wm, output_path="watermarked.wav")
-print(f"Embedded: {watermark}")
+watermarked_audio, sample_rate, watermark_id = wv.embed("input.wav", creator_wm, output_path="watermarked.wav")
+print(f"Embedded: {watermark_id}")
 
 # Detect watermark
-detected_watermark, confidence = wv.detect("watermarked.wav")
-print(f"Detected: {detected_watermark} (confidence: {confidence:.2%})")
+watermark_id, confidence = wv.detect("watermarked.wav")
+print(f"Detected: {watermark_id} (confidence: {confidence:.2%})")
 
 # Verify specific watermark
 is_authentic = wv.verify("watermarked.wav", creator_wm)
@@ -161,23 +173,63 @@ custom_wm = WatermarkID.custom("1010101010101010")      # 16-bit binary
 custom_wm = WatermarkID.custom(42)                      # Integer 0-65535
 ```
 
+---
+
+## Results
+
+### Audio Quality Assessment
+
+WaveVerify maintains high audio quality while ensuring robust watermark embedding:
+
+| Method | PESQ | STOI | ViSQOL | SISNR |
+|--------|------|------|--------|-------|
+| WaveVerify | 4.34 | **1.00** | **4.76** | 24.23 |
+
+### Robustness Against Audio Effects
+
+Performance evaluation across common audio transformations:
+
+| Audio Effect | Detection (TPR/FPR) | MIoU |
+|--------------|---------------------|------|
+| Identity | 1.000 (1.000/0.000) | 0.985 |
+| Resample (8000Hz) | 1.000 (1.000/0.000) | 0.989 |
+| Speed (0.8×) | 1.000 (1.000/0.000) | 0.983 |
+| Highpass Filter (3500Hz) | 1.000 (1.000/0.000) | 0.984 |
+| Bandpass Filter (300-4000Hz) | 1.000 (1.000/0.000) | 0.981 |
+
+### Combined Effects Performance
+
+Robustness against multiple simultaneous transformations:
+
+| Combined Effects | Detection (TPR/FPR) | MIoU |
+|------------------|---------------------|------|
+| Highpass (3500Hz) + Noise (σ=0.001) | 1.000 (1.000/0.000) | 0.975 |
+| Lowpass (2000Hz) + Speed (0.8×) | 1.000 (1.000/0.000) | 0.979 |
+| Bandpass (300–4000Hz) + Resample (32000Hz) | 1.000 (1.000/0.000) | 0.981 |
+
+---
+
 ## Project Status
 
 - [x] Training implementation
-- [x] Pretrained checkpoint release
 - [x] Python package for easy integration 
+
+---
 
 ## Citation
 
 If you use WaveVerify in your research, please cite:
 
 ```bibtex
-@article{pujari2025waveverify,
+@inproceedings{pujari2025waveverify,
   title={WaveVerify: A Novel Audio Watermarking Framework for Media Authentication and Combatting Deepfakes},
   author={Pujari, Aditya and Rattani, Ajita},
+  booktitle={IEEE International Joint Conference on Biometrics (IJCB)},
   year={2025}
 }
 ```
+
+---
 
 ## Contact
 

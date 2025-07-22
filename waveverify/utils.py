@@ -44,7 +44,8 @@ if not logger.handlers:
 # Checkpoint metadata
 CHECKPOINTS: Final[Dict[str, Dict[str, Any]]] = {
     "base": {
-        "url": "https://github.com/pujariaditya/WaveVerify/releases/download/v1.0/waveverify_base.tar.gz",
+        # TODO: add checkpoint url      
+        "url": "",
         "size": "150MB",
         "sha256": None  # Will be updated when checkpoint is released
     }
